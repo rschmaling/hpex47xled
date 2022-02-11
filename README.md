@@ -4,7 +4,7 @@ This is an attempt at creating a daemon to monitor HD activity and activate the 
 You must have libdevstat and libcam installed on your system to run the binary. I suggest compiling for your version as devstat checks its version against
 the running kernel and will fail (complain?) if they are different.
 
-It will most function on any version of FreeBSD with devstat support - I believe I read > FreeBSD 9. I have not validated this.
+It should function on any version of FreeBSD with devstat support - I believe I read somwhere that > FreeBSD 9 will suffice. I have not validated this.
 
 To compile you will need gmake and gcc (mostly because I am lazy and plagerised the makefile from a GNU linux program.
 
