@@ -12,7 +12,9 @@ A majority of the code is taken from iostat.c located under /usr/src/usr.sbin/io
 to gather kernel usage statistics. 
 
 To run - simply copy the file to /usr/local/bin, place the hpex47xled init file under /usr/local/etc/rc.d/
-add 'hpex47xled_enable="YES"' to your /etc/rc.conf file.
+add 'hpex47xled_enable="YES"' to your /etc/rc.conf file. The file uses syslog() to put messages at LOG_NOTICE into /var/log/messages.
+Root privileges are needed to start the progrma, however, the program attempts to drop privileges after startup to nobody:nobody. 
+If that user doesn't exist on your system, the program may fail or it may not...YMMV.
 
 Usage:
 
@@ -23,7 +25,7 @@ hpex47xled
 --help - help message
 --version - current version of the software
 --debug - prints additional information
---daemon - to fork the process into the background. Only needed if run directly.
+--daemon - to fork the process into the background. --daemon is only needed if run directly, it is not needed in the hpex47xled rc file.
 
 Do not hesitate to reach out to me with any questions/concerns/suggestions (lots of suggestions and pointers as I am sure I made loads of mistakes)
 
