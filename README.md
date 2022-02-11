@@ -13,7 +13,7 @@ to gather kernel usage statistics.
 
 To run - simply copy the file to /usr/local/bin, place the hpex47xled init file under /usr/local/etc/rc.d/
 add 'hpex47xled_enable="YES"' to your /etc/rc.conf file. The file uses syslog() to put messages at LOG_NOTICE into /var/log/messages.
-Root privileges are needed to start the progrma, however, the program attempts to drop privileges after startup to nobody:nobody. 
+Root privileges are needed to start the program, however, the program attempts to drop privileges after startup to nobody:nobody. 
 If that user doesn't exist on your system, the program may fail or it may not...YMMV.
 
 Usage:
