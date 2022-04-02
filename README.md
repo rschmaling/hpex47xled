@@ -3,7 +3,7 @@ This is an attempt at creating a daemon to monitor HD activity and activate the 
 
 You must have libdevstat and libcam installed on your system to run the binary. 
 
-It should function on any version of FreeBSD with CAM and devstat support - FreeBSD > 9? Needs validating.
+It should function on any version of FreeBSD with CAM and devstat support - FreeBSD >= 9? Needs validating.
 
 A majority of the code is taken from iostat.c located under /usr/src/usr.sbin/iostat. The program utilizes devstat and the devstat library
 to gather kernel usage statistics. 
