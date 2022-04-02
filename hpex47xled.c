@@ -48,6 +48,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <assert.h>
 #include <kvm.h>
 #include <devstat.h>
 #include <camlib.h>
@@ -105,324 +106,543 @@
 #define PL2      (BL2 | RL2)// second purple led
 #define PL3      (BL3 | RL3)// third purple led
 #define PL4      (BL4 | RL4)// forth purple led
+#define OFFSTATE	0X007FFF // state the register should be in when lights are off
 
 #define HDD1   1
 #define HDD2   2
 #define HDD3   3
 #define HDD4   4
 
+#define BLINK_DELAY 65000000 // for nanosleep() timespec struct - blinking delay for LEDs in nanoseconds
+
+enum ledcolor {
+	BLUE = 1,
+	RED = 2,
+	PURPLE = 3,
+};
+
 int show_help(char * progname );
 void sigterm_handler(int s);
-static void devstats(int init, long double etime);
-int blt(int led);
-int rlt(int led);
-int plt(int led);
-int offled(int led);
+size_t disk_init(void);
+size_t run_mediasmart(void);
+int blt(int bay_led);
+int rlt(int bay_led);
+int plt(int bay_led);
+int offled(int bay_led, int off_color );
 int show_version(char * progname );
-int show_help(char * progname );
-void drop_priviledges( );
+void drop_priviledges(void);
 
 struct hpled
 {
-	char path[10];
-	int target_id;
-	int path_id;
 	u_int64_t b_read;
 	u_int64_t b_write;
 	u_int64_t n_read;
 	u_int64_t n_write;
+	size_t dev_index;
+	int target_id;
+	int path_id;
+	int last_color;
 	int HDD;
+	char path[10];
 };
 
-static struct statinfo cur, last;
-static int io;
-static int num_devices;
-static struct device_selection *dev_select;
-static int maxshowdevs;
-static int global_count = 0;
-static struct hpled ide0, ide1, ide2, ide3 ;
-static struct hpled hpex470[4];
+char *VERSION = "0.9.1";
+struct statinfo cur;
+int io;
+struct device_selection *dev_select;
+size_t maxshowdevs, run, num_devices;
+size_t global_count = 0;
+struct hpled ide0, ide1, ide2, ide3 ;
+struct hpled hpex470[4];
 u_int16_t encreg;
+char *HD = "IDE";
+devstat_select_mode select_mode;
+struct devstat_match *matches;
+kvm_t *kd = NULL;
+long generation;
+int num_devices_specified, num_selected, num_selections, num_matches;
+long select_generation;
+char **specified_devices;
 
-static int debug = 0; /* set it in here for now. I'll make it a command line option later */
-static int run_as_daemon = 0; /* set it in here for now. I'll make it a command line option later */
+size_t debug = 0; /* set it in here for now. I'll make it a command line option later */
+size_t run_as_daemon = 0; /* set it in here for now. I'll make it a command line option later */
 
-static void
-devstats(int init, long double etime)
+size_t disk_init(void)
 {
-        int dn;
-        u_int64_t total_bytes, total_bytes_read, total_bytes_write; 
-        char *devicename;
+    size_t dn, di;
+    u_int64_t total_bytes, total_bytes_read, total_bytes_write; 
+    char *devicename;
 	struct cam_device *cam_dev = NULL;
+	long double etime = 1.00;
+	size_t disks = 0;
+	num_matches = 0;
+	matches = NULL;
 
-        for (dn = 0; dn < num_devices; dn++) {
-                int di;
+	if (devstat_buildmatch(HD, &matches, &num_matches) != 0)
+		errx(1, "%s in %s line %d", devstat_errbuf,__FUNCTION__, __LINE__);
 
-		//if ((dev_select[dn].selected == 0) || (dev_select[dn].selected > maxshowdevs))
+	if(debug) printf("\nAfter devstat_buildmatch - Matches = %d Number of Matches = %d \n", matches->num_match_categories, num_matches);
+
+	if (devstat_checkversion(kd) < 0)
+		errx(1, "%s in %s line %d", devstat_errbuf, __FUNCTION__, __LINE__);
+
+	if ((num_devices = devstat_getnumdevs(kd)) < 0)
+		err(1, "can't get number of devices in %s line %d", __FUNCTION__, __LINE__);
+
+	if(debug) printf("Number of devices is: %ld \n", num_devices);
+
+	cur.dinfo = (struct devinfo *)calloc(1, sizeof(struct devinfo));
+
+	if (cur.dinfo == NULL)
+		err(1, "calloc failed in %s line %d", __FUNCTION__, __LINE__);
+
+    if (devstat_getdevs(kd, &cur) == -1)
+        err(1, "%s in %s line %d", devstat_errbuf, __FUNCTION__, __LINE__);
+	
+    specified_devices = calloc(num_matches, sizeof(char *));
+	
+	if (specified_devices == NULL)
+		err(1, "calloc failed for specified_device in %s line %d", __FUNCTION__, __LINE__);
+
+	specified_devices[0] = malloc(strlen("11") * sizeof(char *));
+
+	if( specified_devices[0] == NULL )
+		err(1, "malloc failed for specified_devices[a]");
+
+	assert(sizeof(specified_devices[0]) > sizeof("4"));
+	strlcpy(specified_devices[0], "4", sizeof(specified_devices[0]));
+
+	maxshowdevs = 4;
+	num_devices = cur.dinfo->numdevs;
+	generation = cur.dinfo->generation;
+	num_devices_specified = num_matches;
+
+	/* calculate all updates since boot */
+	cur.snap_time = 0;
+
+	if(debug) {
+		printf("Max Show Devices = %ld \n", maxshowdevs);
+		printf("Number of Devices = %ld \n", num_devices);
+		printf("Generation = %ld \n", generation);
+		printf("Number of Devices Specified = %d \n", num_devices_specified);
+		printf("Specified Devices is = %s \n", specified_devices[0]);
+		printf("End of devstat selection section in %s line %d\n\n\n", __FUNCTION__, __LINE__);
+	}
+
+	dev_select = NULL;
+	select_mode = DS_SELECT_ONLY;
+
+	if (devstat_selectdevs(&dev_select, &num_selected,
+                            &num_selections, &select_generation, generation,
+                            cur.dinfo->devices, num_devices, matches,
+                            num_matches, specified_devices,
+                            num_devices_specified, select_mode, maxshowdevs,
+                            0) == -1)
+    		errx(1, "%s", devstat_errbuf);
+
+
+    for (dn = 0; dn < num_devices; dn++) {
+
 		if (dev_select[dn].selected > maxshowdevs)
                        continue;
 
-                di = dev_select[dn].position;
-/*
-		    What is NULL'ed out below:
-     		    DSM_TOTAL_TRANSFERS, &total_transfers,
-                    DSM_TOTAL_TRANSFERS_READ, &total_transfers_read,
-                    DSM_TOTAL_TRANSFERS_WRITE, &total_transfers_write,
-                    DSM_TOTAL_BLOCKS, &total_blocks,
-                    DSM_KB_PER_TRANSFER, &kb_per_transfer,
-                    DSM_TRANSFERS_PER_SECOND, &transfers_per_second,
-                    DSM_TRANSFERS_PER_SECOND_READ, &transfers_per_second_read,
-                    DSM_TRANSFERS_PER_SECOND_WRITE, &transfers_per_second_write,
-                    DSM_MB_PER_SECOND, &mb_per_second,
-                    DSM_MB_PER_SECOND_READ, &mb_per_second_read,
-                    DSM_MB_PER_SECOND_WRITE, &mb_per_second_write,
-                    DSM_BLOCKS_PER_SECOND, &blocks_per_second,
-                    DSM_MS_PER_TRANSACTION, &ms_per_transaction,
-                    DSM_MS_PER_TRANSACTION_READ, &ms_per_read,
-                    DSM_MS_PER_TRANSACTION_WRITE, &ms_per_write,
-                    DSM_MS_PER_TRANSACTION_OTHER, &ms_per_other,
-                    DSM_BUSY_PCT, &busy_pct,
-                    DSM_QUEUE_LENGTH, &queue_len,
-                    DSM_TOTAL_DURATION, &total_duration,
-                    DSM_TOTAL_BUSY_TIME, &busy_time,
-*/
+        di = dev_select[dn].position;
+
+        if (devstat_compute_statistics(&cur.dinfo->devices[di], NULL, etime,
+            DSM_TOTAL_BYTES, &total_bytes,
+            DSM_TOTAL_BYTES_READ, &total_bytes_read,
+            DSM_TOTAL_BYTES_WRITE, &total_bytes_write,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+		   	NULL,
+            NULL,
+            NULL, 
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL, 
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            DSM_NONE) != 0)
+                errx(1, "%s", devstat_errbuf);
+
+        if ((dev_select[dn].selected == 0) || (dev_select[dn].selected > maxshowdevs))
+                continue;
 
 
-                  if (devstat_compute_statistics(&cur.dinfo->devices[di], NULL, etime,
-                    DSM_TOTAL_BYTES, &total_bytes,
-                    DSM_TOTAL_BYTES_READ, &total_bytes_read,
-                    DSM_TOTAL_BYTES_WRITE, &total_bytes_write,
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-		    NULL,
-                    NULL,
-                    NULL, 
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL, 
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-                    DSM_NONE) != 0)
-                        errx(1, "%s", devstat_errbuf);
+	    if (asprintf(&devicename, "/dev/%s%d", cur.dinfo->devices[di].device_name, cur.dinfo->devices[di].unit_number) == -1)
+	 		errx(1, "asprintf"); 
 
-                if ((dev_select[dn].selected == 0) || (dev_select[dn].selected > maxshowdevs))
-                     continue;
+		cam_dev = cam_open_device(devicename, O_RDWR);
 
-		if ( init == 1 ) {
-			/* I know, this is suboptimal */	
-	        	if (asprintf(&devicename, "/dev/%s%d", cur.dinfo->devices[di].device_name, cur.dinfo->devices[di].unit_number) == -1)
-	 			errx(1, "asprintf"); 
-			cam_dev = cam_open_device(devicename, O_RDWR);
-			if(debug) {
-				printf("struct devinfo device name after adding 0-3 is %s \n",devicename);
-				printf("CAM device name is : %s \n", cam_dev->device_name);
-				printf("The Unit Number is: %i \n", cam_dev->dev_unit_num);
-				printf("The Sim Name is: %s \n", cam_dev->sim_name);
-				printf("The sim_unit_number is: %i \n", cam_dev->sim_unit_number);
-				printf("The bus_id is: %i \n", cam_dev->bus_id);
-				printf("The target_lun is: %li \n",cam_dev->target_lun);
-				printf("The target_id is: %i \n",cam_dev->target_id);
-				printf("The path_id is: %i \n",cam_dev->path_id);
-				printf("The pd_type is: %i \n",cam_dev->pd_type);
-				printf("The file descriptor is: %i \n",cam_dev->fd);
-			}
-
-			/* on a HP EX47x there are only 4 IDE devices (provided you set the bios to 4(IDE) 4(IDE) per the mediasmart forum. These will always be the same */
-			/* rather than mess around with dynamically allocating and figuring them out, I'm just hardcoding them here */
-			if( cam_dev->path_id == 0 && cam_dev->target_id == 0) {
-				sprintf(ide0.path,devicename);
-				ide0.target_id = cam_dev->target_id;		
-				ide0.path_id = cam_dev->path_id;
-				ide0.b_read = total_bytes_read;
-				ide0.b_write = total_bytes_write;
-				ide0.n_read = 0;
-				ide0.n_write = 0;
-				ide0.HDD = 1;
-				hpex470[di] = ide0;
-
-				if(debug)
-					printf("Now Monitoring %s in HP Mediasmart Server Slot %i \n",ide0.path, ide0.HDD);
-
-				syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide0.path, ide0.HDD);
-				
-			}
-			else if ( cam_dev->path_id == 0 && cam_dev->target_id == 1) {
-				sprintf(ide1.path,devicename);
-				ide1.target_id = cam_dev->target_id;		
-				ide1.path_id = cam_dev->path_id;
-				ide1.b_read = total_bytes_read;
-				ide1.b_write = total_bytes_write;
-				ide1.n_read = 0;
-				ide1.n_write = 0;
-				ide1.HDD = 2;
-				hpex470[di] = ide1;
-
-				if(debug)
-					printf("Now Monitoring %s in HP Mediasmart Server Slot %i \n",ide1.path, ide1.HDD);
-
-				syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide1.path, ide1.HDD);
-
-			}
-			else if ( cam_dev->path_id == 1 && cam_dev->target_id == 0) {
-				sprintf(ide2.path,devicename);
-				ide2.target_id = cam_dev->target_id;		
-				ide2.path_id = cam_dev->path_id;
-				ide2.b_read = total_bytes_read;
-				ide2.b_write = total_bytes_write;
-				ide2.n_read = 0;
-				ide2.n_write = 0;
-				ide2.HDD = 3;
-				hpex470[di] = ide2;
-
-				if(debug)
-					printf("Now Monitoring %s in HP Mediasmart Server Slot %i \n",ide2.path, ide2.HDD);
-
-				syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide2.path, ide2.HDD);
-
-			}
-			else if ( cam_dev->path_id == 1 && cam_dev->target_id == 1) {
-				sprintf(ide3.path,devicename);
-				ide3.target_id = cam_dev->target_id;		
-				ide3.path_id = cam_dev->path_id;
-				ide3.b_read = total_bytes_read;
-				ide3.b_write = total_bytes_write;
-				ide3.n_read = 0;
-				ide3.n_write = 0;
-				ide3.HDD = 4;
-				hpex470[di] = ide3;
-
-				if(debug)
-					printf("Now Monitoring %s in HP Mediasmart Server Slot %i \n",ide3.path, ide3.HDD);
-
-				syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide3.path, ide3.HDD);
-
-			}
-			else { /* something went wrong here */
-				err(1, "unknown path_id or target_id");
-			}
-
-			if(di > 3)
-				err(1, "Illegal number of devices in devstat()");
-
-			hpex470[di].b_read = total_bytes_read;
-			hpex470[di].b_write = total_bytes_write;
-			global_count = di;
-			cam_close_device(cam_dev);
-			free(devicename);
+		if(debug) {
+			printf("The device name is    : %s \n", devicename);
+			printf("CAM device name is    : %s \n", cam_dev->device_name);
+			printf("The Unit Number is    : %i \n", cam_dev->dev_unit_num);
+			printf("The Sim Name is       : %s \n", cam_dev->sim_name);
+			printf("The sim_unit_number is: %i \n", cam_dev->sim_unit_number);
+			printf("The bus_id is         : %i \n", cam_dev->bus_id);
+			printf("The target_lun is     : %li \n", cam_dev->target_lun);
+			printf("The target_id is      : %i \n", cam_dev->target_id);
+			printf("The path_id is        : %i \n", cam_dev->path_id);
+			printf("The pd_type is        : %i \n", cam_dev->pd_type);
+			printf("The file descriptor is: %i \n", cam_dev->fd);
 		}
-		else {
-			hpex470[di].n_read = total_bytes_read;
-			hpex470[di].n_write = total_bytes_write;
-		}
-        }
-}
 
-/* blue led toggle */
-int
-blt(int led)
+		/* on a HP EX47x there are only 4 IDE devices (provided you set the bios to 4(IDE) 4(IDE) per the mediasmart forum. These will always be the same */
+		/* rather than mess around with dynamically allocating and figuring them out, I'm just hardcoding them here */
+		if( cam_dev->path_id == 0 && cam_dev->target_id == 0) {
+			assert(sizeof(devicename) < sizeof(ide0.path));
+			strlcpy(ide0.path, devicename, sizeof(ide0.path));
+			ide0.target_id = cam_dev->target_id;		
+			ide0.path_id = cam_dev->path_id;
+			ide0.dev_index = di;
+			ide0.b_read = total_bytes_read;
+			ide0.b_write = total_bytes_write;
+			ide0.n_read = 0;
+			ide0.n_write = 0;
+			ide0.HDD = 1;
+			hpex470[di] = ide0;
+
+			if(debug){
+				printf("HP Disk %d :\nTotal bytes read: %ld\nTotal bytes write: %ld\n\n",ide0.HDD, ide0.b_read, ide0.b_write);
+				printf("Now Monitoring %s in HP Mediasmart Server Slot %i \n\n",ide0.path, ide0.HDD);
+			}
+
+			syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide0.path, ide0.HDD);
+			++disks;	
+		}
+		else if ( cam_dev->path_id == 0 && cam_dev->target_id == 1) {
+			assert(sizeof(devicename) < sizeof(ide1.path));
+			strlcpy(ide1.path,devicename, sizeof(ide1.path));
+			ide1.target_id = cam_dev->target_id;		
+			ide1.path_id = cam_dev->path_id;
+			ide1.dev_index = di;
+			ide1.b_read = total_bytes_read;
+			ide1.b_write = total_bytes_write;
+			ide1.n_read = 0;
+			ide1.n_write = 0;
+			ide1.HDD = 2;
+			hpex470[di] = ide1;
+
+			if(debug){
+				printf("HP Disk %d :\nTotal bytes read: %ld \nTotal bytes write: %ld\n\n",ide1.HDD, ide1.b_read, ide1.b_write);
+				printf("Now Monitoring %s in HP Mediasmart Server Slot %i \n\n",ide1.path, ide1.HDD);
+			}
+
+			syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide1.path, ide1.HDD);
+
+		}
+		else if ( cam_dev->path_id == 1 && cam_dev->target_id == 0) {
+			assert(sizeof(devicename) < sizeof(ide2.path));
+			strlcpy(ide2.path,devicename, sizeof(ide2.path));
+			ide2.target_id = cam_dev->target_id;		
+			ide2.path_id = cam_dev->path_id;
+			ide2.dev_index = di;
+			ide2.b_read = total_bytes_read;
+			ide2.b_write = total_bytes_write;
+			ide2.n_read = 0;
+			ide2.n_write = 0;
+			ide2.HDD = 3;
+			hpex470[di] = ide2;
+
+			if(debug){
+				printf("HP Disk %d :\nTotal bytes read: %ld\nTotal bytes write: %ld\n\n",ide2.HDD, ide2.b_read, ide2.b_write);
+				printf("Now Monitoring %s in HP Mediasmart Server Slot %i \n\n",ide2.path, ide2.HDD);
+			}
+
+			syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide2.path, ide2.HDD);
+
+		}
+		else if ( cam_dev->path_id == 1 && cam_dev->target_id == 1) {
+			assert(sizeof(devicename) < sizeof(ide3.path));
+			strlcpy(ide3.path,devicename, sizeof(ide3.path));
+			ide3.target_id = cam_dev->target_id;		
+			ide3.path_id = cam_dev->path_id;
+			ide3.dev_index = di;
+			ide3.b_read = total_bytes_read;
+			ide3.b_write = total_bytes_write;
+			ide3.n_read = 0;
+			ide3.n_write = 0;
+			ide3.HDD = 4;
+			hpex470[di] = ide3;
+
+			if(debug){
+				printf("HP Disk %d :\nTotal bytes read: %ld \nTotal bytes write: %ld\n\n",ide3.HDD, ide3.b_read, ide3.b_write);
+				printf("Now Monitoring %s in HP Mediasmart Server Slot %i \n\n",ide3.path, ide3.HDD);
+			}
+
+			syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide3.path, ide3.HDD);
+
+		}
+		else { /* something went wrong here */
+			err(1, "unknown path_id or target_id");
+		}
+
+		if(di > 3)
+			err(1, "Illegal number of devices - di = %ld in %s line %d", di, __FUNCTION__, __LINE__);
+
+		cam_close_device(cam_dev);
+		free(devicename);
+	}
+	free(specified_devices[0]);
+	specified_devices[0] = NULL;
+	free(specified_devices);
+	specified_devices = NULL;
+
+	if(debug)
+		printf("\nThe number of disks is %ld in %s line %d\n", disks, __FUNCTION__, __LINE__);
+
+	return (disks);
+};
+size_t run_mediasmart(void)
 {
-   switch (led) {
+	u_int64_t total_bytes; 
+    long double etime = 1.00;
+	int led_state = 0;
+	int retval = 0;
+	struct timespec tv = { .tv_sec = 0, .tv_nsec = BLINK_DELAY };
+
+	while( run ) {
+		retval = devstat_getdevs(kd, &cur);
+		if( retval == 1) {
+			run = 0;
+			break;
+		}
+		if( retval == -1) {
+			syslog(LOG_CRIT, "Bad return from devstat_getdevs() in function %s line %d",__FUNCTION__, __LINE__ );
+			fprintf(stderr, "invalid return from devstat_getdevs() in %s line %d", __FUNCTION__, __LINE__);
+			run = 0;
+			break;
+		}
+
+		for (int x = 0; x < global_count; x++) {
+			if (devstat_compute_statistics(&cur.dinfo->devices[hpex470[x].dev_index], NULL, etime,
+    		    DSM_TOTAL_BYTES, &total_bytes,
+     		    DSM_TOTAL_BYTES_READ, &hpex470[x].n_read,
+    		    DSM_TOTAL_BYTES_WRITE, &hpex470[x].n_write,
+     		    NULL,
+     		    NULL,
+     		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL, 
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL, 
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    NULL,
+    		    DSM_NONE) != 0)
+					err(1, "%s in %s line %d", devstat_errbuf, __FUNCTION__, __LINE__);
+
+			if ((hpex470[x].b_read != hpex470[x].n_read) && (hpex470[x].b_write != hpex470[x].n_write)) {
+				/* we both read and wrote at the same time - yes this happens */
+				hpex470[x].b_read = hpex470[x].n_read;
+				hpex470[x].b_write = hpex470[x].n_write;
+
+				if(debug)
+					printf("HDD %i - total bytes read: %li  total bytes write: %li \n",hpex470[x].HDD, hpex470[x].n_read, hpex470[x].n_write);
+
+				plt(hpex470[x].HDD);
+				led_state = 1;
+				hpex470[x].last_color = PURPLE;
+			}
+			else if (hpex470[x].b_read != hpex470[x].n_read ) {
+				/* we read some number of bytes */
+				hpex470[x].b_read = hpex470[x].n_read;
+				
+				if(debug)
+					printf("HDD %i - total bytes read: %li \n", hpex470[x].HDD, hpex470[x].n_read);
+
+				plt(hpex470[x].HDD);	
+				led_state = 1;
+				hpex470[x].last_color = PURPLE;
+			}
+			else if (hpex470[x].b_write != hpex470[x].n_write) {
+				/* we wrote some number of bytes */
+				hpex470[x].b_write = hpex470[x].n_write;
+				
+				if(debug)
+					printf("HDD %i - total bytes written: %li \n", hpex470[x].HDD, hpex470[x].n_write);
+				
+				blt(hpex470[x].HDD);
+				led_state = 1;
+				hpex470[x].last_color = BLUE;
+			}
+			else {
+				nanosleep(&tv, NULL);
+
+				if( led_state ) {
+					/* we turn off the leds */
+					/* off_color: 1 = blue    2 = red    3 = purple */
+					led_state = offled(hpex470[x].HDD, hpex470[x].last_color);
+					hpex470[x].last_color = 0;
+				}
+				continue ;
+			}
+	
+		}
+
+	}
+	return(retval);
+};
+/* blue led toggle */
+int blt(int bay_led)
+{
+   switch (bay_led) {
       case HDD1:
-         encreg = encreg ^ BL1;
+         encreg &= ~BL1;
          break;
       case HDD2:
-         encreg = encreg ^ BL2;
+         encreg &= ~BL2;
          break;
       case HDD3:
-         encreg = encreg ^ BL3;
+         encreg &= ~BL3;
          break;
       case HDD4:
-         encreg = encreg ^ BL4;
+         encreg &= ~BL4;
          break;
    }
    outw(ADDR, encreg);
    return(0);
-}
+};
 
 /* red led toggle */
-int
-rlt(int led)
+int rlt(int bay_led)
 {
-   switch (led) {
+   switch (bay_led) {
       case HDD1:
-         encreg = encreg ^ RL1;
+         encreg &= ~RL1;
          break;
       case HDD2:
-         encreg = encreg ^ RL2;
+         encreg &= ~RL2;
          break;
       case HDD3:
-         encreg = encreg ^ RL3;
+         encreg &= ~RL3;
          break;
       case HDD4:
-         encreg = encreg ^ RL4;
+         encreg &= ~RL4;
          break;
    }
    outw(ADDR, encreg);
    return(0);
-}
+};
 
 /* purple led toggle */
-int
-plt(int led)
+int plt(int bay_led)
 {
-	switch (led) {
+	switch (bay_led) {
   	   case HDD1:
-	      encreg = encreg ^ PL1;
+	      encreg &= ~PL1;
 	      break;
 	   case HDD2:
-	      encreg = encreg ^ PL2;
+	      encreg &= ~PL2;
 	      break;
 	   case HDD3:
-	      encreg = encreg ^ PL3;
+	      encreg &= ~PL3;
 	      break;
 	   case HDD4:
-	      encreg = encreg ^ PL4;
+	      encreg &= ~PL4;
 	      break;
 	}
 	outw(ADDR, encreg);
 	return(0);
-}
+};
 
-int
-offled(int led)
+int offled(int bay_led, int off_color )
 {
-	// usleep(100000);
-	usleep(85000);
+	/* 1 = blue    2 = red    3 = purple */
+	encreg = inw(ADDR);
+	switch( off_color ) {
+	case 1:
+		switch (bay_led) {
+			case HDD1:
+				encreg |= BL1;
+				break;
+			case HDD2:
+				encreg |= BL2;
+				break;
+			case HDD3:
+				encreg |= BL3;
+				break;
+			case HDD4:
+				encreg |= BL4;
+				break;
+			}
+		break;
+	case 2:
+		switch (bay_led) {
+			case HDD1:
+				encreg |= RL1;
+				break;
+			case HDD2:
+				encreg |= RL2;
+				break;
+			case HDD3:
+				encreg |= RL3;
+				break;
+			case HDD4:
+				encreg |= RL4;
+				break;
+			}
+		break;
+	case 3:
+		switch (bay_led) {
+			case HDD1:
+				encreg |= PL1;
+				break;
+			case HDD2:
+				encreg |= PL2;
+				break;
+			case HDD3:
+				encreg |= PL3;
+				break;
+			case HDD4:
+				encreg |= PL4;
+				break;
+		}
+		break;
+
+	}
 	/* doing this until I can figure out how to turn off the each light individually */
-	encreg = CTL;
 	outw(ADDR, encreg);
 	return(0);
-}
+};
 
-void
-drop_priviledges( ) {
+void drop_priviledges(void) {
 	struct passwd* pw = getpwnam( "nobody" );
 	if ( !pw ) return; /* huh? */
 	if ( (setgid( pw->pw_gid )) && (setuid( pw->pw_uid )) != 0 )
-		err(1, "Unable to set gid or uid to nobody");
+		err(1, "Unable to set gid or uid to nobody in %s line %d", __FUNCTION__, __LINE__);
 
 	if(debug) {
 		printf("Successfully dropped priviledges to %s \n",pw->pw_name);
-		printf("We should now be safe to continue \n");
 	}
-}
+};
 
-char*
-curdir(char *str)
+char* curdir(char *str)
 {
 	char *cp = strrchr(str, '/');
 	return cp ? cp+1 : str;
-}
+};
 
 int show_help(char * progname ) {
 
@@ -434,32 +654,19 @@ int show_help(char * progname ) {
 	printf("-v, --version	Print Version Information\n");
 
        return 0;
-}
+};
 
 int show_version(char * progname ) {
 	char *this = curdir(progname);
-        printf("%s %s %s %s %s %s",this,"Version 0.0.1 compiled on", __DATE__,"at", __TIME__ ,"\n") ;
+        printf("%s %s %s %s %s %s %s",this,VERSION,"compiled on", __DATE__,"at", __TIME__ ,"\n") ;
         return 0;
-}
+};
 
-int
-main (int argc, char **argv)
+int main (int argc, char **argv)
 {
-   struct devstat_match *matches;
-   int num_matches = 0;
-   kvm_t *kd = NULL;
-   long generation;
-   int num_devices_specified;
-   int num_selected, num_selections;
-   long select_generation;
-   char **specified_devices;
-   char *HD = "ide\0";
-   devstat_select_mode select_mode;
-   long double etime;
-   int init = 0;
-
+   
 	if (geteuid() !=0 ) {
-		printf("Try running as root to avoid Segfault and core dump \n");
+		printf("Must be run as root\n");
 		err(1, "not running as root user");
 	}
 
@@ -496,6 +703,7 @@ main (int argc, char **argv)
         }
 
 	openlog("hpex47xled:", LOG_CONS | LOG_PID, LOG_DAEMON );
+	syslog( LOG_NOTICE, "Starting %s version %s",curdir(argv[0]), VERSION );
 	signal( SIGTERM, sigterm_handler);
 	signal( SIGINT, sigterm_handler);
 	signal( SIGQUIT, sigterm_handler);
@@ -509,203 +717,63 @@ main (int argc, char **argv)
 	io = open("/dev/io", 000);
 	encreg = CTL;
 	outw(ADDR, encreg); 
-	matches = NULL;
 
-	if (devstat_buildmatch(HD, &matches,&num_matches) != 0)
-               errx(1, "%s", devstat_errbuf);
-
-	if(debug) {
-		printf("Match Categories from struct matches is: %i \n", matches->num_match_categories);
-		printf("Number of matched devices is: %i \n", num_matches);
-	}
-
-	if (devstat_checkversion(kd) < 0)
-                errx(1, "%s", devstat_errbuf);
-
-        if ((num_devices = devstat_getnumdevs(kd)) < 0)
-                err(1, "can't get number of devices");
-
-	if(debug) {
-        	printf("Total Devices: %i \n", num_devices);
-        	printf("Total Matches: %i \n", num_matches);
-		printf("Device selection for buildmatch: %s\n", HD);
-	}
-
-        cur.dinfo = (struct devinfo *)calloc(1, sizeof(struct devinfo));
-        if (cur.dinfo == NULL)
-                err(1, "calloc failed");
-
-        last.dinfo = (struct devinfo *)calloc(1, sizeof(struct devinfo));
-        if (last.dinfo == NULL)
-                err(1, "calloc failed");
-
-        if (devstat_getdevs(kd, &cur) == -1)
-                errx(1, "%s", devstat_errbuf);
-
- 	/* specified_devices = (char **)malloc(sizeof(char *)); */
- 	specified_devices = calloc(num_matches, sizeof(char *));
-       	if (specified_devices == NULL)
-	        err(1, "calloc failed for specified_device");
-
-	specified_devices[0] = malloc(strlen("11") * sizeof(char *));
-	if( specified_devices[0] == NULL )
-		err(1, "malloc failed for specified_devices[a]");
-
-        sprintf(specified_devices[0],"%i", 4);
-
-	// maxshowdevs = num_matches;
-	maxshowdevs = 4;
-        num_devices = cur.dinfo->numdevs;
-        generation = cur.dinfo->generation;
-	num_devices_specified = num_matches;
-	// num_devices_specified = 4;
-
-	if(debug) {
-		printf("The number of devices specified at specified_devices[0] is : %s \n",specified_devices[0]);
-		printf("maxshowdevs after assignment from num_matches: %i \n", maxshowdevs);
-		printf("num_devices after assginment from cur.dinfo->numdevs: %i \n", num_devices);
-		printf("generation from cur.dinfo->generation: %li \n", generation);
-		printf("num_devices_specified after assginment from num_matches: %i \n", num_devices_specified);
-	}
-
-
-        dev_select = NULL;
-
-        select_mode = DS_SELECT_ONLY;
-
-        if (devstat_selectdevs(&dev_select, &num_selected,
-                               &num_selections, &select_generation, generation,
-                               cur.dinfo->devices, num_devices, matches,
-                               num_matches, specified_devices,
-                               num_devices_specified, select_mode, maxshowdevs,
-                               0) == -1)
-               errx(1, "%s", devstat_errbuf);
-
-	if(debug) {
-	for(int y = 0; y < num_selected ; y++)
-		printf("Devices selected: %s \n", dev_select[y].device_name);
-	}
-
-        etime = cur.snap_time - last.snap_time;
-        if (etime == 0.0)
-             etime = 1.0;
-
-	/* a kludge to set the global array with the initial read/write totals */
-	init = 1;
-
-        devstats(init, etime);
-
-	if(debug) {
-		printf("Global Count is: %d \n", global_count);
-		printf("Zero is normal here - we start at 0 through 3 \n");
-		printf("Just before the while loop to check for activity \n");
-		for(int y = 0; y < num_selected ; y++)
-			printf("Devices selected: %s \n", dev_select[y].device_name);
-	}
-
-	syslog(LOG_NOTICE,"Initialized. Dropping priviledges now. Now monitoring for drive activity - Enjoy the light show!");
+	global_count = disk_init();
 
 	/* Try and drop root priviledges now that we have initialized */
 	drop_priviledges();
 
-	while(1) {
-		init = 0;
-                /*
-                 * Here what we want to do is refresh our device stats.
-                 * devstat_getdevs() returns 1 when the device list has changed.
-                 * If the device list has changed, we want to go through
-                 * the selection process again, in case a device that we
-                 * were previously displaying has gone away.
-                 */
+	syslog(LOG_NOTICE,"Initialized. Now monitoring for drive activity");
 
-                switch (devstat_getdevs(kd, &cur)) {
-                case -1:
+	run = 1;
+	while(1) {
+ 
+        switch (run) {
+            case 1: {
+                int retval = run_mediasmart();
+
+                switch(retval) {
+                    case -1:
                         errx(1, "%s", devstat_errbuf);
                         break;
-                case 1: {
-                        int retval;
-				
-        		select_mode = DS_SELECT_ONLY;
-                        num_devices = cur.dinfo->numdevs;
-                        generation = cur.dinfo->generation;
-                        retval = devstat_selectdevs(&dev_select, &num_selected,
-                                                    &num_selections,
-                                                    &select_generation,
-                                                    generation,
-                                                    cur.dinfo->devices,
-                                                    num_devices, matches,
-                                                    num_matches,
-                                                    specified_devices,
-                                                    num_devices_specified,
-                                                    select_mode, maxshowdevs,
-                                                    0);
-                        switch(retval) {
-                        case -1:
-                                errx(1, "%s", devstat_errbuf);
-                                break;
-                        case 1:
-                                break;
-                        default:
-                                break;
-                        }
+                    case 1:
+						free(cur.dinfo);
+						cur.dinfo = NULL;
+						free(dev_select);
+						free(matches);
+						syslog(LOG_NOTICE, "New or removed device detected - reinitializing");
+						if(debug)
+							fprintf(stderr, "\n\n**** New/Removed Device Detected - re-initializing ****\n\n");
+						global_count = disk_init();
+						if(global_count <= 0)
+							err(1, "Unknown return from disk initialization in %s line %d", __FUNCTION__, __LINE__);
+						run = 1;
                         break;
+					default:
+						fprintf(stderr,"In default case in retval switch loop - function %s line %d\n", __FUNCTION__, __LINE__);
+						break;
                 }
-                default:
-                        break;
             }
-		devstats(init, etime);
-		for (int x = 0; x <= global_count; x++) {
-			if ((hpex470[x].b_read != hpex470[x].n_read) && (hpex470[x].b_write != hpex470[x].n_write)) {
-				/* we both read and wrote at the same time - yes this happens */
-				hpex470[x].b_read = hpex470[x].n_read;
-				hpex470[x].b_write = hpex470[x].n_write;
-				if(debug) {
-					printf("Total bytes read: %li  Total bytes written: %li \n",hpex470[x].n_read, hpex470[x].n_write);
-					printf("HP HDD is : %i \n", hpex470[x].HDD);
-				}
-				plt(hpex470[x].HDD);
-			}
-			else if (hpex470[x].b_read != hpex470[x].n_read ) {
-				/* we read some number of bytes */
-				hpex470[x].b_read = hpex470[x].n_read;
-				if(debug) {
-				 	printf("HP HDD is : %i \n", hpex470[x].HDD);
-					printf("Total bytes read: %li \n",hpex470[x].n_read);
-				}
-				plt(hpex470[x].HDD);	
-			}
-			else if (hpex470[x].b_write != hpex470[x].n_write) {
-				/* we wrote some number of bytes */
-				hpex470[x].b_write = hpex470[x].n_write;
-				if(debug) {
-					printf("Total bytes written: %li \n", hpex470[x].n_write);
-					printf("HP HDD is : %i \n", hpex470[x].HDD);
-				}
-				blt(hpex470[x].HDD);
-			}
-			else {
-				/* we turn off the leds */
-				offled(hpex470[x].HDD);
-			}
-	
-		}
+            default:
+				fprintf(stderr,"In default case in run switch - function %s line %d\n", __FUNCTION__, __LINE__);
+                break;
+        }
+
 	}	
 
 	close(io);
 	syslog(LOG_NOTICE,"Closing Down");
-	closelog();
-	free(specified_devices[0]);
-	free(specified_devices);
-
-	
+	closelog();	
 	return(0);
-}
+};
 void sigterm_handler(int s)
 {
-	syslog(LOG_NOTICE,"Closing Down");
+	outw(ADDR, encreg);
+	syslog(LOG_NOTICE,"Caught signal %d and closing down", s);
 	closelog();
 	close(io);
-	free(last.dinfo);
 	free(cur.dinfo);
+	free(dev_select);
+	free(matches);
 	err(1, "Exiting from signal");
-}
+};
