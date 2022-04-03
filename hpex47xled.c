@@ -37,6 +37,12 @@
 /////  - Majority of the devstat and other statistical gathering is taken from FreeBSD devstat.c, iostat.c, and others.
 /////  - All of the IO work is taken from freebsd_led.c - taken from the http://www.mediasmartserver.net/forums/viewtopic.php?f=2&t=2335 author ndenev
 /////  - Need to turn off the lights individually - for now they are all turned off by the ledoff() function.
+/////
+/////  - 2022-04-02 - Robert Schmaling
+/////  - Created disk_init and run_mediasmart functions in place of original process
+/////  - added code that could handle device changes - e.g. hotswap. 
+/////  - code cleanup
+/////   
 /* includes */
 #include <stdio.h>
 #include <err.h>
@@ -146,7 +152,7 @@ struct hpled
 	char path[10];
 };
 
-char *VERSION = "0.9.1";
+const char *VERSION = "0.9.3";
 struct statinfo cur;
 int io;
 struct device_selection *dev_select;
@@ -164,13 +170,14 @@ int num_devices_specified, num_selected, num_selections, num_matches;
 long select_generation;
 char **specified_devices;
 
-size_t debug = 0; /* set it in here for now. I'll make it a command line option later */
-size_t run_as_daemon = 0; /* set it in here for now. I'll make it a command line option later */
+size_t debug = 0; /* debug option default */
+size_t run_as_daemon = 0; /* daemon option default */
 
-size_t disk_init(void)
+/* initialize struct statinfo cur, kvm_t *kd, and configure struct hpled ide0-3 */
+size_t disk_init(void) 
 {
     size_t dn, di;
-    u_int64_t total_bytes, total_bytes_read, total_bytes_write; 
+    u_int64_t total_bytes_read, total_bytes_write;
     char *devicename;
 	struct cam_device *cam_dev = NULL;
 	long double etime = 1.00;
@@ -248,7 +255,7 @@ size_t disk_init(void)
 
         di = dev_select[dn].position;
 
-        if (devstat_compute_statistics(&cur.dinfo->devices[di], NULL, etime,
+    /*     if (devstat_compute_statistics(&cur.dinfo->devices[di], NULL, etime,
             DSM_TOTAL_BYTES, &total_bytes,
             DSM_TOTAL_BYTES_READ, &total_bytes_read,
             DSM_TOTAL_BYTES_WRITE, &total_bytes_write,
@@ -272,8 +279,10 @@ size_t disk_init(void)
             NULL,
             NULL,
             NULL,
-            DSM_NONE) != 0)
-                errx(1, "%s", devstat_errbuf);
+            DSM_NONE) != 0) */
+		if (devstat_compute_statistics(&cur.dinfo->devices[di], NULL, etime, DSM_TOTAL_BYTES_READ, &total_bytes_read, 				
+			DSM_TOTAL_BYTES_WRITE, &total_bytes_write, DSM_NONE) != 0)
+            err(1, "%s in %s line %d", devstat_errbuf, __FUNCTION__, __LINE__);
 
         if ((dev_select[dn].selected == 0) || (dev_select[dn].selected > maxshowdevs))
                 continue;
@@ -385,7 +394,7 @@ size_t disk_init(void)
 
 		}
 		else { /* something went wrong here */
-			err(1, "unknown path_id or target_id");
+			err(1, "unknown path_id or target_id in %s line %d", __FUNCTION__, __LINE__);
 		}
 
 		if(di > 3)
@@ -404,9 +413,9 @@ size_t disk_init(void)
 
 	return (disks);
 };
+ /* function to monitor disk activity. if a device change is detected, break and re-initialize */
 size_t run_mediasmart(void)
 {
-	u_int64_t total_bytes; 
     long double etime = 1.00;
 	int led_state = 0;
 	int retval = 0;
@@ -426,31 +435,9 @@ size_t run_mediasmart(void)
 		}
 
 		for (int x = 0; x < global_count; x++) {
+			/* we only need read and write. we don't have a statinfo last thus NULL. etime isn't used in these stats but passed for completeness */
 			if (devstat_compute_statistics(&cur.dinfo->devices[hpex470[x].dev_index], NULL, etime,
-    		    DSM_TOTAL_BYTES, &total_bytes,
-     		    DSM_TOTAL_BYTES_READ, &hpex470[x].n_read,
-    		    DSM_TOTAL_BYTES_WRITE, &hpex470[x].n_write,
-     		    NULL,
-     		    NULL,
-     		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL, 
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL, 
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    NULL,
-    		    DSM_NONE) != 0)
+     		    DSM_TOTAL_BYTES_READ, &hpex470[x].n_read, DSM_TOTAL_BYTES_WRITE, &hpex470[x].n_write, DSM_NONE) != 0)
 					err(1, "%s in %s line %d", devstat_errbuf, __FUNCTION__, __LINE__);
 
 			if ((hpex470[x].b_read != hpex470[x].n_read) && (hpex470[x].b_write != hpex470[x].n_write)) {
@@ -566,7 +553,7 @@ int plt(int bay_led)
 	outw(ADDR, encreg);
 	return(0);
 };
-
+/* turn off the bay light led based on last color */
 int offled(int bay_led, int off_color )
 {
 	/* 1 = blue    2 = red    3 = purple */
@@ -622,11 +609,10 @@ int offled(int bay_led, int off_color )
 		break;
 
 	}
-	/* doing this until I can figure out how to turn off the each light individually */
 	outw(ADDR, encreg);
 	return(0);
 };
-
+/* attempt to drop privileges after initialization */
 void drop_priviledges(void) {
 	struct passwd* pw = getpwnam( "nobody" );
 	if ( !pw ) return; /* huh? */
@@ -637,13 +623,13 @@ void drop_priviledges(void) {
 		printf("Successfully dropped priviledges to %s \n",pw->pw_name);
 	}
 };
-
+/* return the name of the program */
 char* curdir(char *str)
 {
 	char *cp = strrchr(str, '/');
 	return cp ? cp+1 : str;
 };
-
+/* display help function */
 int show_help(char * progname ) {
 
 	char *this = curdir(progname);
@@ -655,7 +641,7 @@ int show_help(char * progname ) {
 
        return 0;
 };
-
+/* display version */
 int show_version(char * progname ) {
 	char *this = curdir(progname);
         printf("%s %s %s %s %s %s %s",this,VERSION,"compiled on", __DATE__,"at", __TIME__ ,"\n") ;
@@ -766,6 +752,7 @@ int main (int argc, char **argv)
 	closelog();	
 	return(0);
 };
+/* signal handling and cleanup */
 void sigterm_handler(int s)
 {
 	outw(ADDR, encreg);
