@@ -11,7 +11,7 @@ RCFILE = hpex47xled.rc
 FLAGS = -O2 -Wall -Werror -std=gnu99 -march=native 
 CFLAGS = $(FLAGS)
 CXXFLAGS = $(CFLAGS)
-LDFLAGS = -lcam -ldevstat 
+LDFLAGS = -lcam -ldevstat
 CFILES = hpex47xled.c
 OBJS = hpex47xled.o
 TARGETS = hpex47xled
@@ -35,6 +35,6 @@ clean:
 .PHONY: install
 
 install: 
-	test -f $(RCPREFIX)/hpex49xled || install -m 755 $(RCFILE) $(RCPREFIX)/hpex49xled
+	test -f $(RCPREFIX)/hpex47xled || install -m 755 $(RCFILE) $(RCPREFIX)/hpex47xled
 	install -m 700 $(TARGETS) $(PREFIX)/bin/
 	strip $(PREFIX)/bin/$(TARGETS)

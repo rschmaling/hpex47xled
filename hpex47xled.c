@@ -153,6 +153,7 @@ struct hpled
 };
 
 const char *VERSION = "0.9.3";
+char *progname;
 struct statinfo cur;
 int io;
 struct device_selection *dev_select;
@@ -161,7 +162,7 @@ size_t global_count = 0;
 struct hpled ide0, ide1, ide2, ide3 ;
 struct hpled hpex470[4];
 u_int16_t encreg;
-char *HD = "IDE";
+char *HD = "ide";
 devstat_select_mode select_mode;
 struct devstat_match *matches;
 kvm_t *kd = NULL;
@@ -255,38 +256,12 @@ size_t disk_init(void)
 
         di = dev_select[dn].position;
 
-    /*     if (devstat_compute_statistics(&cur.dinfo->devices[di], NULL, etime,
-            DSM_TOTAL_BYTES, &total_bytes,
-            DSM_TOTAL_BYTES_READ, &total_bytes_read,
-            DSM_TOTAL_BYTES_WRITE, &total_bytes_write,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-		   	NULL,
-            NULL,
-            NULL, 
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            NULL, 
-            NULL,
-            NULL,
-            NULL,
-            NULL,
-            DSM_NONE) != 0) */
 		if (devstat_compute_statistics(&cur.dinfo->devices[di], NULL, etime, DSM_TOTAL_BYTES_READ, &total_bytes_read, 				
 			DSM_TOTAL_BYTES_WRITE, &total_bytes_write, DSM_NONE) != 0)
             err(1, "%s in %s line %d", devstat_errbuf, __FUNCTION__, __LINE__);
 
         if ((dev_select[dn].selected == 0) || (dev_select[dn].selected > maxshowdevs))
                 continue;
-
 
 	    if (asprintf(&devicename, "/dev/%s%d", cur.dinfo->devices[di].device_name, cur.dinfo->devices[di].unit_number) == -1)
 	 		errx(1, "asprintf"); 
@@ -407,6 +382,10 @@ size_t disk_init(void)
 	specified_devices[0] = NULL;
 	free(specified_devices);
 	specified_devices = NULL;
+	free(dev_select);
+	dev_select = NULL;
+	free(matches);
+	matches = NULL;
 
 	if(debug)
 		printf("\nThe number of disks is %ld in %s line %d\n", disks, __FUNCTION__, __LINE__);
@@ -422,7 +401,9 @@ size_t run_mediasmart(void)
 	struct timespec tv = { .tv_sec = 0, .tv_nsec = BLINK_DELAY };
 
 	while( run ) {
+		
 		retval = devstat_getdevs(kd, &cur);
+
 		if( retval == 1) {
 			run = 0;
 			break;
@@ -485,7 +466,7 @@ size_t run_mediasmart(void)
 				}
 				continue ;
 			}
-	
+
 		}
 
 	}
@@ -687,9 +668,10 @@ int main (int argc, char **argv)
                       printf("++++++....\n"); 
                 }
         }
+	progname = curdir(argv[0]);
 
 	openlog("hpex47xled:", LOG_CONS | LOG_PID, LOG_DAEMON );
-	syslog( LOG_NOTICE, "Starting %s version %s",curdir(argv[0]), VERSION );
+	syslog( LOG_NOTICE, "Starting %s version %s",progname, VERSION );
 	signal( SIGTERM, sigterm_handler);
 	signal( SIGINT, sigterm_handler);
 	signal( SIGQUIT, sigterm_handler);
