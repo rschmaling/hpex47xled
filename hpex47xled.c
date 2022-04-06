@@ -212,10 +212,14 @@ size_t disk_init(void)
 	if (specified_devices == NULL)
 		err(1, "calloc failed for specified_device in %s line %d", __FUNCTION__, __LINE__);
 
-	specified_devices[0] = malloc(strlen("11") * sizeof(char *));
+	/* Two characters would suffice - but bigger is sometimes better, especially when its zeroed */
+	specified_devices[0] = calloc(1, strlen("111")); 
 
 	if( specified_devices[0] == NULL )
 		err(1, "malloc failed for specified_devices[a]");
+	
+	if(num_devices != cur.dinfo->numdevs)
+		err(1, "Number of devices is inconsistent in %s line %d", __FUNCTION__, __LINE__);
 
 	assert(sizeof(specified_devices[0]) > sizeof("4"));
 	strlcpy(specified_devices[0], "4", sizeof(specified_devices[0]));
