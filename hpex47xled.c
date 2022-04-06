@@ -152,7 +152,7 @@ struct hpled
 	char path[10];
 };
 
-const char *VERSION = "0.9.3";
+const char *VERSION = "1.0.3";
 char *progname;
 struct statinfo cur;
 int io;
