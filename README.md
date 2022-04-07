@@ -23,7 +23,7 @@ hpex47xled
 --debug - prints additional information
 --daemon - to fork the process into the background. --daemon is only needed if run directly, it is not needed in the hpex47xled rc file.
 
-Do not hesitate to reach out to me with any questions/concerns/suggestions (lots of suggestions and pointers as I am sure I made loads of mistakes)
+Do not hesitate to reach out to me with any questions/concerns/suggestions
 
 Feel free to open issues here.
 
