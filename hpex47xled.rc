@@ -10,15 +10,11 @@
 # hpex47xled_enable (bool):          Set to NO by default.
 #               Set it to YES to enable hpex47xled.
 # hpex47xled_user (string):          Set user that hpex47xled will run under
-#               Default is "nobody".
+#               Default is "root".
 # hpex47xled_group (string):         Set group that hpex47xled will run under
-#               Default is "nobody".
+#               Default is "wheel".
 # hpex47xled_args (string):          Set extra arguments to pass to hpex47xled
 #               Default is "".
-# hpex47xled_listen_address (string):Set ip:port that hpex47xled will listen on
-#               Default is ":9100".
-# hpex47xled_textfile_dir (string):  Set directory that hpex47xled will watch
-#               Default is "/var/tmp/hpex47xled".
 
 . /etc/rc.subr
 
@@ -30,13 +26,13 @@ load_rc_config $name
 : ${hpex47xled_enable:="NO"}
 : ${hpex47xled_user:="root"}
 : ${hpex47xled_group:="wheel"}
-#: ${hpex47xled_args:=""}
+: ${hpex47xled_args:=""}
 
 pidfile=/var/run/hpex47xled.pid
 command="/usr/sbin/daemon"
 procname="/usr/local/bin/hpex47xled"
 command_args="-f -p ${pidfile} -T ${name} \
-    /usr/bin/env ${procname} "
+    /usr/bin/env ${procname} ${hpex47xled_args}"
 
 start_precmd=hpex47xled_startprecmd
 

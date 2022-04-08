@@ -43,6 +43,11 @@
 /////  - added code that could handle device changes - e.g. hotswap. 
 /////  - code cleanup
 /////   
+/////  - 2022-04-08 - Robert Schmaling
+/////  - added led_state to struct hpled to correct a logic error. Each disk must keep its own state, not the function - I've been too 'thread' oriented.
+/////  - added --audit and -a to command line arguments. This will allow me to see if the changes to led state are working. Might be useful for other statistics later
+/////  - changed version to 1.0.5 to account for these minor modifications.
+/////
 /* includes */
 #include <stdio.h>
 #include <err.h>
@@ -148,11 +153,12 @@ struct hpled
 	int target_id;
 	int path_id;
 	int last_color;
+	int led_state;
 	int HDD;
 	char path[10];
 };
 
-const char *VERSION = "1.0.3";
+const char *VERSION = "1.0.5";
 char *progname;
 struct statinfo cur;
 int io;
@@ -173,6 +179,7 @@ char **specified_devices;
 
 size_t debug = 0; /* debug option default */
 size_t run_as_daemon = 0; /* daemon option default */
+size_t audit_mon = 0; /* audit light function in syslog */
 
 /* initialize struct statinfo cur, kvm_t *kd, and configure struct hpled ide0-3 */
 size_t disk_init(void) 
@@ -400,7 +407,6 @@ size_t disk_init(void)
 size_t run_mediasmart(void)
 {
     long double etime = 1.00;
-	int led_state = 0;
 	int retval = 0;
 	struct timespec tv = { .tv_sec = 0, .tv_nsec = BLINK_DELAY };
 
@@ -433,8 +439,8 @@ size_t run_mediasmart(void)
 				if(debug)
 					printf("HDD %i - total bytes read: %li  total bytes write: %li \n",hpex470[x].HDD, hpex470[x].n_read, hpex470[x].n_write);
 
-				plt(hpex470[x].HDD);
-				led_state = 1;
+				
+				hpex470[x].led_state = plt(hpex470[x].HDD);
 				hpex470[x].last_color = PURPLE;
 			}
 			else if (hpex470[x].b_read != hpex470[x].n_read ) {
@@ -444,8 +450,8 @@ size_t run_mediasmart(void)
 				if(debug)
 					printf("HDD %i - total bytes read: %li \n", hpex470[x].HDD, hpex470[x].n_read);
 
-				plt(hpex470[x].HDD);	
-				led_state = 1;
+					
+				hpex470[x].led_state = plt(hpex470[x].HDD);
 				hpex470[x].last_color = PURPLE;
 			}
 			else if (hpex470[x].b_write != hpex470[x].n_write) {
@@ -455,18 +461,26 @@ size_t run_mediasmart(void)
 				if(debug)
 					printf("HDD %i - total bytes written: %li \n", hpex470[x].HDD, hpex470[x].n_write);
 				
-				blt(hpex470[x].HDD);
-				led_state = 1;
+				
+				hpex470[x].led_state = blt(hpex470[x].HDD);
 				hpex470[x].last_color = BLUE;
 			}
 			else {
 				nanosleep(&tv, NULL);
 
-				if( led_state ) {
+				if( hpex470[x].led_state ) {
 					/* we turn off the leds */
 					/* off_color: 1 = blue    2 = red    3 = purple */
-					led_state = offled(hpex470[x].HDD, hpex470[x].last_color);
-					hpex470[x].last_color = 0;
+					hpex470[x].led_state = offled(hpex470[x].HDD, hpex470[x].last_color);
+
+					if(debug) {
+						if(hpex470[x].led_state == 1)
+							fprintf(stderr, "Return from offled for disk %d was 1 - will - re-try offled() in %s line %d", x, __FUNCTION__, __LINE__);
+					}
+					if(audit_mon) { 
+						if(hpex470[x].led_state == 1)
+							syslog(LOG_NOTICE, "** ERROR ** DISK: %d returned LED active after offled() call - %#08X", x, inw(ADDR));
+					}
 				}
 				continue ;
 			}
@@ -494,7 +508,7 @@ int blt(int bay_led)
          break;
    }
    outw(ADDR, encreg);
-   return(0);
+   return 1;
 };
 
 /* red led toggle */
@@ -515,7 +529,7 @@ int rlt(int bay_led)
          break;
    }
    outw(ADDR, encreg);
-   return(0);
+   return 1;
 };
 
 /* purple led toggle */
@@ -536,7 +550,7 @@ int plt(int bay_led)
 	      break;
 	}
 	outw(ADDR, encreg);
-	return(0);
+	return 1;
 };
 /* turn off the bay light led based on last color */
 int offled(int bay_led, int off_color )
@@ -595,7 +609,8 @@ int offled(int bay_led, int off_color )
 
 	}
 	outw(ADDR, encreg);
-	return(0);
+	/* since this is not threaded - check to ensure the lights are really off */
+	return (inw(ADDR) == OFFSTATE) ? 0 : 1 ;
 };
 /* attempt to drop privileges after initialization */
 void drop_priviledges(void) {
@@ -619,7 +634,8 @@ int show_help(char * progname ) {
 
 	char *this = curdir(progname);
 	printf("%s %s %s", "Usage: ", this,"\n");
-	printf("-d, --debug 	Print Debug Messages\n");
+	printf("-a  --audit     Print LED status info in syslog -- diagnostic purposes\n");
+	printf("-d, --debug 	Print Debug Messages -- VERBOSE!\n");
 	printf("-D, --daemon 	Detach and Run as a Daemon - do not use this in service setup \n");
 	printf("-h, --help	Print This Message\n");
 	printf("-v, --version	Print Version Information\n");
@@ -643,6 +659,7 @@ int main (int argc, char **argv)
 
         // long command line arguments
         const struct option long_opts[] = {
+				{ "audit",			no_argument,	   0, 'a' },
                 { "debug",          no_argument,       0, 'd' },
                 { "daemon",         no_argument,       0, 'D' },
                 { "help",           no_argument,       0, 'h' },
@@ -656,9 +673,12 @@ int main (int argc, char **argv)
                 if ( -1 == c ) break;
 
                 switch ( c ) {
-		case 'D': // daemon
-			++run_as_daemon;
-			break;
+				case 'a':
+						++audit_mon;
+						break;
+				case 'D': // daemon
+						++run_as_daemon;
+						break;
                 case 'd': // debug
                         ++debug;
                         break;
@@ -696,6 +716,9 @@ int main (int argc, char **argv)
 	drop_priviledges();
 
 	syslog(LOG_NOTICE,"Initialized. Now monitoring for drive activity");
+
+	if(audit_mon)
+		syslog(LOG_NOTICE, "LED Auditing Enabled");
 
 	run = 1;
 	while(1) {
