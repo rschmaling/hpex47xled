@@ -425,7 +425,7 @@ size_t run_mediasmart(void)
 			break;
 		}
 
-		for (int x = 0; x < global_count; x++) {
+		for (int x = 0; x <= global_count; x++) {
 			/* we only need read and write. we don't have a statinfo last thus NULL. etime isn't used in these stats but passed for completeness */
 			if (devstat_compute_statistics(&cur.dinfo->devices[hpex470[x].dev_index], NULL, etime,
      		    DSM_TOTAL_BYTES_READ, &hpex470[x].n_read, DSM_TOTAL_BYTES_WRITE, &hpex470[x].n_write, DSM_NONE) != 0)
