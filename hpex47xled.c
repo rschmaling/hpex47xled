@@ -335,6 +335,7 @@ size_t disk_init(void)
 			}
 
 			syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide1.path, ide1.HDD);
+			++disks;
 
 		}
 		else if ( cam_dev->path_id == 1 && cam_dev->target_id == 0) {
@@ -356,6 +357,7 @@ size_t disk_init(void)
 			}
 
 			syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide2.path, ide2.HDD);
+			++disks;
 
 		}
 		else if ( cam_dev->path_id == 1 && cam_dev->target_id == 1) {
@@ -377,6 +379,7 @@ size_t disk_init(void)
 			}
 
 			syslog(LOG_NOTICE,"Now Monitoring %s in HP Mediasmart Server Slot %i for activity",ide3.path, ide3.HDD);
+			++disks;
 
 		}
 		else { /* something went wrong here */
@@ -425,7 +428,7 @@ size_t run_mediasmart(void)
 			break;
 		}
 
-		for (int x = 0; x <= global_count; x++) {
+		for (int x = 0; x < global_count; x++) {
 			/* we only need read and write. we don't have a statinfo last thus NULL. etime isn't used in these stats but passed for completeness */
 			if (devstat_compute_statistics(&cur.dinfo->devices[hpex470[x].dev_index], NULL, etime,
      		    DSM_TOTAL_BYTES_READ, &hpex470[x].n_read, DSM_TOTAL_BYTES_WRITE, &hpex470[x].n_write, DSM_NONE) != 0)
@@ -475,7 +478,7 @@ size_t run_mediasmart(void)
 
 					if(debug) {
 						if(hpex470[x].led_state == 1)
-							fprintf(stderr, "Return from offled for disk %d was 1 - will - re-try offled() in %s line %d", x, __FUNCTION__, __LINE__);
+							fprintf(stderr, "Return from offled for disk %d was 1 - will - re-try offled() in %s line %d\n", x, __FUNCTION__, __LINE__);
 					}
 					if(audit_mon) { 
 						if(hpex470[x].led_state == 1)
@@ -711,6 +714,9 @@ int main (int argc, char **argv)
 	outw(ADDR, encreg); 
 
 	global_count = disk_init();
+
+	if(debug) 
+		printf("The global count is %ld \n", global_count);
 
 	/* Try and drop root priviledges now that we have initialized */
 	drop_priviledges();
