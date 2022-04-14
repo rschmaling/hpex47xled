@@ -435,7 +435,7 @@ size_t run_mediasmart(void)
 					err(1, "%s in %s line %d", devstat_errbuf, __FUNCTION__, __LINE__);
 
 			if ((hpex470[x].b_read != hpex470[x].n_read) && (hpex470[x].b_write != hpex470[x].n_write)) {
-				/* we both read and wrote at the same time - yes this happens */
+				/* we both read and wrote at the same time */
 				hpex470[x].b_read = hpex470[x].n_read;
 				hpex470[x].b_write = hpex470[x].n_write;
 
@@ -466,7 +466,7 @@ size_t run_mediasmart(void)
 				
 				
 				hpex470[x].led_state = blt(hpex470[x].HDD);
-				hpex470[x].last_color = BLUE;
+				hpex470[x].last_color = PURPLE; /* lets see if this fixes the problem */
 			}
 			else {
 				nanosleep(&tv, NULL);
@@ -753,7 +753,7 @@ int main (int argc, char **argv)
         }
 
 	}	
-
+	outw(ADDR, encreg);
 	close(io);
 	syslog(LOG_NOTICE,"Closing Down");
 	closelog();	
