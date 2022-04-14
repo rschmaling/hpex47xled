@@ -158,7 +158,7 @@ struct hpled
 	char path[10];
 };
 
-const char *VERSION = "1.0.5";
+const char *VERSION = "1.0.6";
 char *progname;
 struct statinfo cur;
 int io;
@@ -475,15 +475,6 @@ size_t run_mediasmart(void)
 					/* we turn off the leds */
 					/* off_color: 1 = blue    2 = red    3 = purple */
 					hpex470[x].led_state = offled(hpex470[x].HDD, hpex470[x].last_color);
-
-					if(debug) {
-						if(hpex470[x].led_state == 1)
-							fprintf(stderr, "Return from offled for disk %d was 1 - will - re-try offled() in %s line %d\n", x, __FUNCTION__, __LINE__);
-					}
-					if(audit_mon) { 
-						if(hpex470[x].led_state == 1)
-							syslog(LOG_NOTICE, "** ERROR ** DISK: %d returned LED active after offled() call - %#08X", x, inw(ADDR));
-					}
 				}
 				continue ;
 			}
@@ -613,7 +604,8 @@ int offled(int bay_led, int off_color )
 	}
 	outw(ADDR, encreg);
 	/* since this is not threaded - check to ensure the lights are really off */
-	return (inw(ADDR) == OFFSTATE) ? 0 : 1 ;
+	/* return (inw(ADDR) == OFFSTATE) ? 0 : 1 ; */
+	return 0;
 };
 /* attempt to drop privileges after initialization */
 void drop_priviledges(void) {
