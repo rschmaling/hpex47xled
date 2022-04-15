@@ -296,6 +296,7 @@ size_t disk_init(void)
 		/* on a HP EX47x there are only 4 IDE devices (provided you set the bios to 4(IDE) 4(IDE) per the mediasmart forum. These will always be the same */
 		/* rather than mess around with dynamically allocating and figuring them out, I'm just hardcoding them here */
 		if( cam_dev->path_id == 0 && cam_dev->target_id == 0) {
+			memset(&ide0.path, 0, sizeof(ide0.path));
 			assert(sizeof(devicename) < sizeof(ide0.path));
 			strlcpy(ide0.path, devicename, sizeof(ide0.path));
 			ide0.target_id = cam_dev->target_id;		
@@ -317,6 +318,7 @@ size_t disk_init(void)
 			++disks;	
 		}
 		else if ( cam_dev->path_id == 0 && cam_dev->target_id == 1) {
+			memset(&ide1.path, 0, sizeof(ide1.path));
 			assert(sizeof(devicename) < sizeof(ide1.path));
 			strlcpy(ide1.path,devicename, sizeof(ide1.path));
 			ide1.target_id = cam_dev->target_id;		
@@ -339,6 +341,7 @@ size_t disk_init(void)
 
 		}
 		else if ( cam_dev->path_id == 1 && cam_dev->target_id == 0) {
+			memset(&ide2.path, 0, sizeof(ide2.path));
 			assert(sizeof(devicename) < sizeof(ide2.path));
 			strlcpy(ide2.path,devicename, sizeof(ide2.path));
 			ide2.target_id = cam_dev->target_id;		
@@ -361,6 +364,7 @@ size_t disk_init(void)
 
 		}
 		else if ( cam_dev->path_id == 1 && cam_dev->target_id == 1) {
+			memset(&ide3.path, 0, sizeof(ide3.path));
 			assert(sizeof(devicename) < sizeof(ide3.path));
 			strlcpy(ide3.path,devicename, sizeof(ide3.path));
 			ide3.target_id = cam_dev->target_id;		
