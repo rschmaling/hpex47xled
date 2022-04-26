@@ -124,7 +124,8 @@
 #define HDD3   3
 #define HDD4   4
 
-#define BLINK_DELAY 65000000 // for nanosleep() timespec struct - blinking delay for LEDs in nanoseconds
+#define LED_DELAY 50000000 // for nanosleep() struct timespec - blinking delay for LEDs in nanoseconds
+#define BLINK_DELAY 8500000 // for nanosleep() struct timespec - delay to cause blink for long reads and writes - in nanoseconds
 
 enum ledcolor {
 	BLUE = 1,
@@ -415,10 +416,13 @@ size_t run_mediasmart(void)
 {
     long double etime = 1.00;
 	int retval = 0;
-	struct timespec tv = { .tv_sec = 0, .tv_nsec = BLINK_DELAY };
+	struct timespec t_led = { .tv_sec = 0, .tv_nsec = LED_DELAY };
+	struct timespec t_blink = { .tv_sec = 0, .tv_nsec = BLINK_DELAY };
+	// sigset_t sigempty;
+	// sigemptyset( &sigempty );
 
 	while( run ) {
-		
+
 		retval = devstat_getdevs(kd, &cur);
 
 		if( retval == 1) {
@@ -431,7 +435,6 @@ size_t run_mediasmart(void)
 			run = 0;
 			break;
 		}
-
 		for (int x = 0; x < global_count; x++) {
 			/* we only need read and write. we don't have a statinfo last thus NULL. etime isn't used in these stats but passed for completeness */
 			if (devstat_compute_statistics(&cur.dinfo->devices[hpex470[x].dev_index], NULL, etime,
@@ -445,10 +448,15 @@ size_t run_mediasmart(void)
 
 				if(debug)
 					printf("HDD %i - total bytes read: %li  total bytes write: %li \n",hpex470[x].HDD, hpex470[x].n_read, hpex470[x].n_write);
-
 				
-				hpex470[x].led_state = plt(hpex470[x].HDD);
-				hpex470[x].last_color = PURPLE;
+				if(hpex470[x].led_state){
+					offled(hpex470[x].HDD, hpex470[x].last_color); /* turn off the LED */
+					nanosleep(&t_blink, NULL); /* wait a moment */
+				}
+
+				hpex470[x].led_state = blt(hpex470[x].HDD); /* blink blue - returns 1 */
+				hpex470[x].last_color = PURPLE; /* set the last color - NOTE: this is always purple to avoid leaving red on if last was purple and next is blue */
+				nanosleep(&t_blink, NULL); /* wait moment before moving on */
 			}
 			else if (hpex470[x].b_read != hpex470[x].n_read ) {
 				/* we read some number of bytes */
@@ -457,9 +465,14 @@ size_t run_mediasmart(void)
 				if(debug)
 					printf("HDD %i - total bytes read: %li \n", hpex470[x].HDD, hpex470[x].n_read);
 
-					
-				hpex470[x].led_state = plt(hpex470[x].HDD);
+				if(hpex470[x].led_state){
+					offled(hpex470[x].HDD, hpex470[x].last_color);
+					nanosleep(&t_blink, NULL);
+				}
+				
+				hpex470[x].led_state = plt(hpex470[x].HDD); 
 				hpex470[x].last_color = PURPLE;
+				nanosleep(&t_blink, NULL);
 			}
 			else if (hpex470[x].b_write != hpex470[x].n_write) {
 				/* we wrote some number of bytes */
@@ -467,20 +480,26 @@ size_t run_mediasmart(void)
 				
 				if(debug)
 					printf("HDD %i - total bytes written: %li \n", hpex470[x].HDD, hpex470[x].n_write);
-				
+
+				if(hpex470[x].led_state){
+					offled(hpex470[x].HDD, hpex470[x].last_color);
+					nanosleep(&t_blink, NULL);
+				}
 				
 				hpex470[x].led_state = blt(hpex470[x].HDD);
-				hpex470[x].last_color = PURPLE; /* lets see if this fixes the problem */
+				hpex470[x].last_color = PURPLE;
+				nanosleep(&t_blink, NULL);
 			}
 			else {
-				nanosleep(&tv, NULL);
-
-				if( hpex470[x].led_state ) {
+				nanosleep(&t_led, NULL);
+				if(hpex470[x].led_state) {
 					/* we turn off the leds */
-					/* off_color: 1 = blue    2 = red    3 = purple */
+					/* off_color: 1 = blue    2 = red    3 = purple - the return is always 0 */
 					hpex470[x].led_state = offled(hpex470[x].HDD, hpex470[x].last_color);
 				}
-				continue ;
+				/* pause for a brief word from our sponsors */
+				/* pselect(0, NULL, NULL, NULL, &t_wait, &sigempty); */
+				continue;
 			}
 
 		}
@@ -607,7 +626,6 @@ int offled(int bay_led, int off_color )
 
 	}
 	outw(ADDR, encreg);
-	/* since this is not threaded - check to ensure the lights are really off */
 	/* return (inw(ADDR) == OFFSTATE) ? 0 : 1 ; */
 	return 0;
 };
